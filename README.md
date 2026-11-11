@@ -1,7 +1,7 @@
-# tw-stock-30k-scanner → 法人撈底盤中監控
+# tw-stock-faren-scanner — 法人撈底盤中監控
 
-> 2026-11-11 改版：本 repo 已由 30K MACD scanner 覆寫為法人撈底盤中拉回進場監控。
-> 原 30K 程式完整保留於 `scanner_30k_original.py` 與 `backup/30k-original` 分支。
+> 本 repo 為法人撈底盤中拉回進場監控（2026-11-11 上線）。
+> 原程式完整保留於 `scanner_30k_original.py` 與 `backup/30k-original` 分支。
 > 本 repo 只做法人撈底，不動 quant（E3a）與五大選股的 TG 線。
 
 ## 法人 S1 策略（凍結）
@@ -28,7 +28,7 @@
 
 ## Secrets（repo Settings → Secrets and variables → Actions）
 
-- `TELEGRAM_TOKEN`、`TELEGRAM_CHAT_ID`：沿用原 30K repo 的設定（法人 TG 走這條線）。
+- `TELEGRAM_TOKEN`、`TELEGRAM_CHAT_ID`：沿用本 repo 原有的設定（法人 TG 走這條線）。
 - `FAREN_REPORT_TOKEN`：需新增。PAT（classic，scope `repo` 讀取），用來讀取
   私有 repo `wind910715/TSM-srf-sim` 的夜間報告 JSON。
   未設時程式改用快取 `faren_pool.json`，再無快取才用 yfinance 備援

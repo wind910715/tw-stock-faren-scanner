@@ -1,7 +1,7 @@
 name: Faren Pullback Intraday Monitor
 
-# 法人撈底盤中拉回進場監控（2026-11-11 由 30K scanner 覆寫改版）。
-# 原 30K MACD scanner 已封存（程式碼見 scanner_30k_original.py，
+# 法人撈底盤中拉回進場監控。
+# 原程式已封存（程式碼見 scanner_30k_original.py，
 # 完整原版在 backup/30k-original 分支）。本 workflow 只做法人，
 # 不動 quant（E3a）與五大選股的 TG 線。
 #
