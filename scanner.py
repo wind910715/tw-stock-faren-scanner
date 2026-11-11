@@ -25,7 +25,7 @@
      的 pool 陣列，經 GitHub API 讀取（需 FAREN_REPORT_TOKEN Secret，
      PAT 具 repo 讀取權限）。這是最準的來源，與夜間報告逐字一致。
   2. 本地快取 faren_pool.json（上次成功取得的 pool）。
-  3. yfinance 直接算（備援）：以 30K scanner 既有 yfinance 依
+  3. yfinance 直接算（備援）：以 yfinance 依
      faren_nightly.compute_levels 同公式算。注意：Yahoo 無 3491、
      6187、6223 三檔資料，備援時這三檔會跳過並寫警告；7769、2360
      的 fib382/fib236 與報告有小差（252 日高低點資料差異），
