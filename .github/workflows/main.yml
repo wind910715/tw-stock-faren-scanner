@@ -1,28 +1,39 @@
-name: TW Stock 30K Intraday Monitor & 1700 EOD & Weekly Review
+name: Faren Pullback Intraday Monitor
+
+# 法人撈底盤中拉回進場監控（2026-11-11 由 30K scanner 覆寫改版）。
+# 原 30K MACD scanner 已封存（程式碼見 scanner_30k_original.py，
+# 完整原版在 backup/30k-original 分支）。本 workflow 只做法人，
+# 不動 quant（E3a）與五大選股的 TG 線。
+#
+# 排程：每 5 分鐘一輪，週一至週五 UTC 00:00-05:59
+#      （= 台北 08:00-13:59；程式內 in_window 再限 08:50-13:45，
+#       時段外靜默退出）。觸發（現價 <= 進場價）才推 TG，沒觸發靜默。
+# 去重：同一檔同一天只推一次（faren_notified.json，跑完 commit 回 repo）。
 
 on:
-  # 封存：2026-10-31 起停用排程（死叉修正測試未通過），僅保留手動觸發；要復活再把 schedule 加回來
+  schedule:
+    - cron: '*/5 0-5 * * 1-5'
   workflow_dispatch:
     inputs:
-      run_mode:
-        description: '選擇執行模式 (eod = 17:00盤後日報, intraday = 盤中即時監控, weekly = 週五18:00績效週報)'
-        required: true
-        default: 'eod'
+      dry_run:
+        description: '乾跑（不推 TG，只印訊息）'
+        required: false
+        default: 'false'
 
 permissions:
   contents: write
 
 concurrency:
-  group: stock-monitor-group
+  group: faren-monitor-group
   cancel-in-progress: false
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
-  stock_agent:
+  faren_monitor:
     runs-on: ubuntu-latest
-    timeout-minutes: 340
+    timeout-minutes: 10
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -35,31 +46,22 @@ jobs:
       - name: Install dependencies
         run: pip install yfinance pandas numpy requests
 
-      - name: Run Scanner Engine
+      - name: Run Faren Monitor (one shot)
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            python scanner.py ${{ github.event.inputs.run_mode }}
-          elif [ "${{ github.event.schedule }}" = "25 0 * * 1-5" ]; then
-            python scanner.py intraday
-          elif [ "${{ github.event.schedule }}" = "55 9 * * 5" ]; then
-            python scanner.py weekly
-          else
-            python scanner.py eod
-          fi
+          FAREN_REPORT_TOKEN: ${{ secrets.FAREN_REPORT_TOKEN }}
+          DRY_RUN: ${{ github.event.inputs.dry_run == 'true' && '1' || '0' }}
+        run: python scanner.py
 
-      - name: Save Active Positions and Trade History Safely
+      - name: Save Faren Pool and Notify State
         if: always()
         run: |
-          if [ -f positions.json ]; then
-            git config user.name "stock-monitor-bot"
-            git config user.email "bot@users.noreply.github.com"
-            git add positions.json
-            if ! git diff --staged --quiet; then
-              git commit -m "Update portfolio state and trade history [skip ci]"
-              git pull --rebase -X theirs origin main || true
-              git push origin HEAD:main || true
-            fi
+          git config user.name "faren-monitor-bot"
+          git config user.email "bot@users.noreply.github.com"
+          git add faren_pool.json faren_notified.json
+          if ! git diff --staged --quiet; then
+            git commit -m "Update faren pool / notify state [skip ci]"
+            git pull --rebase -X theirs origin main || true
+            git push origin HEAD:main || true
           fi

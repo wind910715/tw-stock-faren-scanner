@@ -1,4 +1,3 @@
-Plaintext
 yfinance>=0.2.40
 pandas>=2.0.0
 numpy>=1.24.0
