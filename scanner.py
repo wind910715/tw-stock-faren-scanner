@@ -26,8 +26,10 @@
      PAT 具 repo 讀取權限）。這是最準的來源，與夜間報告逐字一致。
   2. 本地快取 faren_pool.json（上次成功取得的 pool）。
   3. yfinance 直接算（備援）：以 yfinance 依
-     faren_nightly.compute_levels 同公式算。注意：Yahoo 無 3491、
-     6187、6223 三檔資料，備援時這三檔會跳過並寫警告；7769、2360
+     faren_nightly.compute_levels 同公式算。後綴依市場決定
+     （3491、6187、6223 為上櫃，走 .TWO；其餘走 .TW），
+     TW／TWO 互為備援（照 faren_nightly.yf_backfill）；休市假 bar
+     （量為 0 且開高低收全等）會濾除。7769、2360
      的 fib382/fib236 與報告有小差（252 日高低點資料差異），
      進場價／停損則一致。
 
@@ -148,36 +150,67 @@ def compute_levels(bars, idx):
     return out
 
 
-def compute_levels_yf(sid, eval_date=None):
+# 上櫃（TPEx）標的在 Yahoo 的後綴為 .TWO。scanner 沒有市場欄位，
+# 以下為觀察池內已核實的上櫃檔（MIS 實查：otc_ 有價、tse_ 無價）：
+# 3491 昇達科、6187 萬潤、6223 旺矽；其餘 9 檔皆為上市。
+# 後綴依提示決定優先順序，TW／TWO 互為備援（照 faren_nightly.yf_backfill）。
+OTC_STOCKS = frozenset({"3491", "6187", "6223"})
+
+
+def _yf_suffixes(sid, market_hint=None):
+    """回傳 yfinance 後綴嘗試順序。market_hint 為「上櫃」/OTC/TWO 時
+    先試 .TWO，否則先試 .TW；呼叫方兩個都試，互為備援。"""
+    hint = (market_hint or ("上櫃" if str(sid) in OTC_STOCKS else "")).strip()
+    if hint in ("上櫃", "OTC", "TWO", "tpex", "TPEx"):
+        return ["TWO", "TW"]
+    return ["TW", "TWO"]
+
+
+def compute_levels_yf(sid, eval_date=None, market_hint=None):
     try:
         import yfinance as yf
         import pandas as pd
     except Exception as e:
         log(f"yfinance 備援不可用：{e}")
         return None
-    try:
-        t = yf.Ticker(f"{sid}.TW")
-        h = t.history(period="2y", auto_adjust=False)
-    except Exception as e:
-        log(f"yfinance 抓 {sid} 失敗：{e}")
-        return None
-    if h is None or len(h) == 0:
-        log(f"yfinance 無 {sid} 資料（Yahoo 缺檔），備援跳過")
-        return None
-    if eval_date is not None:
-        h = h[h.index.tz_localize(None) <= pd.Timestamp(eval_date)]
-    if len(h) < 30:
-        log(f"yfinance {sid} 歷史不足 30 根，備援跳過")
-        return None
-    bars = [(d.date(), float(r["Open"]), float(r["High"]), float(r["Low"]),
-             float(r["Close"]), float(r["Volume"])) for d, r in h.iterrows()]
-    lv = compute_levels(bars, len(bars) - 1)
-    if lv is None:
-        return None
-    lv["stock_id"] = sid
-    lv["name"] = POOL_NAMES.get(sid, "")
-    lv["close"] = bars[-1][4]
-    return lv
+    for suffix in _yf_suffixes(sid, market_hint):
+        try:
+            t = yf.Ticker(f"{sid}.{suffix}")
+            h = t.history(period="2y", auto_adjust=False)
+        except Exception as e:
+            log(f"yfinance 抓 {sid}.{suffix} 失敗：{e}")
+            continue
+        if h is None or len(h) == 0:
+            log(f"yfinance 無 {sid}.{suffix} 資料，改試另一後綴")
+            continue
+        if eval_date is not None:
+            h = h[h.index.tz_localize(None) <= pd.Timestamp(eval_date)]
+        bars = []
+        for d, r in h.iterrows():
+            try:
+                o, hi, lo, c, v = (float(r["Open"]), float(r["High"]),
+                                   float(r["Low"]), float(r["Close"]),
+                                   float(r["Volume"]))
+            except (TypeError, ValueError):
+                continue
+            if pd.isna(c) or c <= 0 or hi < lo:
+                continue
+            # 休市假 bar：量為 0 且開高低收全等（faren_nightly.yf_backfill 同款過濾）
+            if v == 0 and o == hi == lo == c:
+                continue
+            bars.append((d.date(), o, hi, lo, c, v))
+        if len(bars) < 30:
+            log(f"yfinance {sid}.{suffix} 有效歷史不足 30 根，改試另一後綴")
+            continue
+        lv = compute_levels(bars, len(bars) - 1)
+        if lv is None:
+            continue
+        lv["stock_id"] = sid
+        lv["name"] = POOL_NAMES.get(sid, "")
+        lv["close"] = bars[-1][4]
+        return lv
+    log(f"yfinance 無 {sid} 資料（TW／TWO 皆無有效歷史），備援跳過")
+    return None
 
 
 def gh_api_get(path, token):
@@ -358,13 +391,22 @@ def save_notified(notified):
 
 
 def send_telegram_chunks(full_text):
+    """推播 TG 訊息（分塊）。回傳 True＝全部 chunk 皆 200，False＝失敗。
+
+    只發到 TELEGRAM_CHAT_ID；token 或 chat_id 未設時直接失敗並大聲報錯，
+    絕不以 getUpdates 猜測收件人（舊版 fallback 會把進場價／停損／停利
+    發給最近私訊過此 bot 的陌生人，2026-11-14 P0 #1 已刪除）。"""
     token = os.environ.get("TELEGRAM_TOKEN", "").strip()
     chat_id = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
     print("================ 訊息預覽 ================")
     print(full_text)
     print("==========================================")
     if not token:
-        return
+        log("ERROR 推播失敗：未設 TELEGRAM_TOKEN")
+        return False
+    if not chat_id:
+        log("ERROR 推播失敗：未設 TELEGRAM_CHAT_ID，不猜測收件人")
+        return False
     chunks, current_chunk = [], ""
     for line in full_text.split("\n"):
         if len(current_chunk) + len(line) + 1 > 3500:
@@ -375,19 +417,18 @@ def send_telegram_chunks(full_text):
     if current_chunk:
         chunks.append(current_chunk)
     url = f"https://api.telegram.org/bot{token}/sendMessage"
-    target_chat_id = chat_id
     for idx, chunk in enumerate(chunks):
-        res = requests.post(url, json={"chat_id": target_chat_id, "text": chunk}, timeout=15)
-        if res.status_code != 200 and idx == 0:
-            upd = requests.get(f"https://api.telegram.org/bot{token}/getUpdates", timeout=15).json()
-            if upd.get("ok") and upd.get("result"):
-                for item in reversed(upd["result"]):
-                    msg_obj = item.get("message") or item.get("edited_message") or item.get("my_chat_member")
-                    if msg_obj and "chat" in msg_obj:
-                        target_chat_id = msg_obj["chat"]["id"]
-                        break
-                res = requests.post(url, json={"chat_id": target_chat_id, "text": chunk}, timeout=15)
+        try:
+            res = requests.post(url, json={"chat_id": chat_id, "text": chunk}, timeout=15)
+        except Exception as e:
+            log(f"ERROR 推播失敗：第 {idx + 1}/{len(chunks)} chunk 連線例外：{e}")
+            return False
         print(f"Telegram 推播狀態碼: {res.status_code}")
+        if res.status_code != 200:
+            log(f"ERROR 推播失敗：第 {idx + 1}/{len(chunks)} chunk 狀態碼 "
+                f"{res.status_code}，不重試、不猜測收件人")
+            return False
+    return True
 
 
 def build_entry_message(item, price):
@@ -433,8 +474,10 @@ def run_once():
             msg = build_entry_message(p, q["price"])
             if DRY_RUN:
                 log(f"[DRY_RUN] TG 不發，訊息：{msg}")
-            else:
-                send_telegram_chunks(msg)
+            elif not send_telegram_chunks(msg):
+                # 推播失敗不記已通知、不列事件，下一輪重試，避免漏推。
+                log(f"法人 {p.get('name')}({sid}) 推播失敗，本輪不記已通知，下一輪重試")
+                continue
             notified[sid] = today
             changed = True
             events.append({"stock_id": sid, "name": p.get("name"),

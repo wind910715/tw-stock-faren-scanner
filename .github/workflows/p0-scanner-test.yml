@@ -1,0 +1,49 @@
+name: P0 Scanner Tests
+
+# 法人 scanner P0 修復測試（#1 getUpdates 資安、#10 .TW 硬編碼）。
+# 全部 mock，不碰真實網路、不發真實 Telegram 訊息。
+# 觸發：push / PR 改到 scanner.py 或 tests/ 時跑；也可手動 dispatch。
+
+on:
+  push:
+    branches:
+      - 'fix/p0-scanner-*'
+      - main
+    paths:
+      - 'scanner.py'
+      - 'tests/**'
+      - '.github/workflows/p0-scanner-test.yml'
+  pull_request:
+    paths:
+      - 'scanner.py'
+      - 'tests/**'
+      - '.github/workflows/p0-scanner-test.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  p0_tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run P0 tests (mocked, no network / no Telegram)
+        run: python -m unittest discover -s tests -v
+
+      - name: Run built-in selftest
+        run: python scanner.py --selftest
